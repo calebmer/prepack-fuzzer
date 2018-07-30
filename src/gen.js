@@ -15,9 +15,9 @@ function genComputation() {
     };
   }
 
-  function getInitialScope() {
+  function getInitialScope(variables = []) {
     return {
-      variables: [],
+      variables,
       functions: [],
     };
   }
@@ -82,7 +82,7 @@ function genComputation() {
   // NOTE: This case must be first in `genScalarExpressionWeightedCases` so we
   // can easily take it out.
   genScalarComputationWeightedCases.unshift([
-    3,
+    15,
     gen.null.then(() => {
       let variables = [];
       // Reuse the variables array if we only have one. Otherwise add all scope
@@ -278,34 +278,49 @@ function genComputation() {
       // function f(...args) { body }
       [
         15,
-        gen.null.then(() => {
-          // Save old scopes
-          const prevScopes = state.scopes;
-          state.scopes = [getInitialScope()];
+        gen
+          .intWithin(0, 4)
+          .then(arity => {
+            const args = Array(arity);
+            args.fill(genComputation);
+            return args;
+          })
+          .then(args => {
+            const params = args.map((arg, i) => ({name: `a${i + 1}`}));
 
-          return genComputation.then(computation => {
-            // Restore old scopes
-            state.scopes = prevScopes;
+            // Save old scopes
+            const prevScopes = state.scopes;
+            state.scopes = [getInitialScope([...params])];
 
-            computation.statements.push(
-              t.returnStatement(computation.expression)
-            );
-            const name = newFunction();
-            const declaration = t.functionDeclaration(
-              t.identifier(name),
-              [],
-              t.blockStatement(computation.statements)
-            );
-            state.declarations.push(declaration);
-            return gen.return({
-              statements: [],
-              expression: t.callExpression(t.identifier(name), []),
+            return genComputation.then(computation => {
+              // Restore old scopes
+              state.scopes = prevScopes;
+
+              computation.statements.push(
+                t.returnStatement(computation.expression)
+              );
+              const name = newFunction(args.length);
+              const declaration = t.functionDeclaration(
+                t.identifier(name),
+                params.map(param => t.identifier(param.name)),
+                t.blockStatement(computation.statements)
+              );
+              state.declarations.push(declaration);
+
+              const statements = args[0] ? args[0].statements : [];
+              pushAll(statements, ...args.slice(1).map(c => c.statements));
+              return gen.return({
+                statements,
+                expression: t.callExpression(
+                  t.identifier(name),
+                  args.map(c => c.expression)
+                ),
+              });
             });
-          });
-        }),
+          }),
       ],
 
-      // f()
+      // f(...args)
       [
         5,
         gen.null.then(() => {
@@ -326,12 +341,24 @@ function genComputation() {
             // If we have no functions then gen a computation.
             return genComputation;
           } else {
-            return gen.oneOf(functions).then(f =>
-              gen.return({
-                statements: [],
-                expression: t.callExpression(t.identifier(f.name), []),
+            return gen
+              .oneOf(functions)
+              .then(f => {
+                const args = Array(f.arity);
+                args.fill(genComputation);
+                return [gen.return(f), args];
               })
-            );
+              .then(([f, args]) => {
+                const statements = args[0] ? args[0].statements : [];
+                pushAll(statements, ...args.slice(1).map(c => c.statements));
+                return gen.return({
+                  statements,
+                  expression: t.callExpression(
+                    t.identifier(f.name),
+                    args.map(c => c.expression)
+                  ),
+                });
+              });
           }
         }),
       ],

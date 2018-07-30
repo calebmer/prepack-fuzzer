@@ -12,12 +12,13 @@ function genComputation() {
       scopes: [getInitialScope()],
       nextVariableId: 1,
       nextFunctionId: 1,
+      arguments: null,
     };
   }
 
-  function getInitialScope(variables = []) {
+  function getInitialScope() {
     return {
-      variables,
+      variables: [],
       functions: [],
     };
   }
@@ -34,6 +35,16 @@ function genComputation() {
     const name = `f${state.nextFunctionId++}`;
     state.scopes[state.scopes.length - 1].functions.push({name, arity});
     return name;
+  }
+
+  function newArgument() {
+    if (state.arguments === null) {
+      return null;
+    } else {
+      const name = `a${state.arguments++ + 1}`;
+      state.scopes[state.scopes.length - 1].variables.push({name});
+      return name;
+    }
   }
 
   const genScalarComputationWeightedCases = [
@@ -77,44 +88,55 @@ function genComputation() {
     ],
   ];
 
-  // Reuse variable from state
-  //
-  // NOTE: This case must be first in `genScalarExpressionWeightedCases` so we
-  // can easily take it out.
-  genScalarComputationWeightedCases.unshift([
-    15,
-    gen.null.then(() => {
-      let variables = [];
-      // Reuse the variables array if we only have one. Otherwise add all scope
-      // variables to our local variables array.
-      if (state.scopes.length === 1) {
-        variables = state.scopes[0].variables;
-      } else {
-        for (let i = 0; i < state.scopes.length; i++) {
-          const scope = state.scopes[i];
-          for (let k = 0; k < scope.variables.length; k++) {
-            variables.push(gen.return(scope.variables[k]));
+  const genScalarComputation = gen.oneOfWeighted([
+    ...genScalarComputationWeightedCases,
+
+    // Reuse variable
+    [
+      5,
+      gen.null.then(() => {
+        let variables = [];
+        // Reuse the variables array if we only have one. Otherwise add all scope
+        // variables to our local variables array.
+        if (state.scopes.length === 1) {
+          variables = state.scopes[0].variables;
+        } else {
+          for (let i = 0; i < state.scopes.length; i++) {
+            const scope = state.scopes[i];
+            for (let k = 0; k < scope.variables.length; k++) {
+              variables.push(gen.return(scope.variables[k]));
+            }
           }
         }
-      }
-      if (variables.length === 0) {
-        // If we have no variables then use one of our other scalar
-        // expression cases.
-        return gen.oneOfWeighted(genScalarComputationWeightedCases.slice(1));
-      } else {
-        return gen.oneOf(variables).then(v =>
-          gen.return({
-            statements: [],
-            expression: t.identifier(v.name),
-          })
-        );
-      }
-    }),
-  ]);
+        if (variables.length === 0) {
+          return gen.oneOfWeighted(genScalarComputationWeightedCases);
+        } else {
+          return gen.oneOf(variables).then(v =>
+            gen.return({
+              statements: [],
+              expression: t.identifier(v.name),
+            })
+          );
+        }
+      }),
+    ],
 
-  const genScalarComputation = gen.oneOfWeighted(
-    genScalarComputationWeightedCases
-  );
+    // Function argument
+    [
+      20,
+      gen.null.then(() => {
+        const argument = newArgument();
+        if (argument === null) {
+          return gen.oneOfWeighted(genScalarComputationWeightedCases);
+        } else {
+          return gen.return({
+            statements: [],
+            expression: t.identifier(argument),
+          });
+        }
+      }),
+    ],
+  ]);
 
   const genComputation = gen.nested(genComputation => {
     // Hack in scope tracking by pushing/popping state.
@@ -260,7 +282,7 @@ function genComputation() {
 
       // var id = init;
       [
-        30,
+        20,
         genComputation.then(({statements, expression}) => {
           const variable = newVariable();
           statements.push(
@@ -278,31 +300,38 @@ function genComputation() {
       // function f(...args) { body }
       [
         15,
-        gen
-          .intWithin(0, 4)
-          .then(arity => {
-            const args = Array(arity);
-            args.fill(genComputation);
-            return args;
-          })
-          .then(args => {
-            const params = args.map((arg, i) => ({name: `a${i + 1}`}));
+        gen.null.then(() => {
+          // Save old stuff
+          const prevArguments = state.arguments;
+          const prevScopes = state.scopes;
 
-            // Save old scopes
-            const prevScopes = state.scopes;
-            state.scopes = [getInitialScope([...params])];
+          // Set new stuff
+          state.arguments = 0;
+          state.scopes = [getInitialScope()];
 
-            return genComputation.then(computation => {
-              // Restore old scopes
+          return genComputation
+            .then(computation => {
+              // Save new stuff
+              const argumentsCount = state.arguments;
+
+              // Restore old stuff
+              state.arguments = prevArguments;
               state.scopes = prevScopes;
 
+              // Generate arguments in old scope.
+              return {
+                computation: gen.return(computation),
+                args: Array(argumentsCount).fill(genComputation),
+              };
+            })
+            .then(({computation, args}) => {
               computation.statements.push(
                 t.returnStatement(computation.expression)
               );
               const name = newFunction(args.length);
               const declaration = t.functionDeclaration(
                 t.identifier(name),
-                params.map(param => t.identifier(param.name)),
+                args.map((c, i) => t.identifier(`a${i + 1}`)),
                 t.blockStatement(computation.statements)
               );
               state.declarations.push(declaration);
@@ -317,7 +346,7 @@ function genComputation() {
                 ),
               });
             });
-          }),
+        }),
       ],
 
       // f(...args)

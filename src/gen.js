@@ -432,4 +432,59 @@ function pushAll(target, ...sources) {
   }
 }
 
-module.exports = {genComputation};
+const genProgramStatements = genComputation().then(
+  ({declarations, computation}) => {
+    computation.statements.push(t.returnStatement(computation.expression));
+    const statements = [];
+    declarations.forEach(declaration => {
+      statements.push(declaration);
+    });
+    statements.push(
+      t.functionDeclaration(
+        t.identifier('main'),
+        [],
+        t.blockStatement(computation.statements)
+      )
+    );
+    statements.push(
+      t.ifStatement(
+        t.memberExpression(t.identifier('global'), t.identifier('__optimize')),
+        t.expressionStatement(
+          t.callExpression(t.identifier('__optimize'), [t.identifier('main')])
+        )
+      )
+    );
+    statements.push(
+      t.expressionStatement(
+        t.assignmentExpression(
+          '=',
+          t.memberExpression(t.identifier('module'), t.identifier('exports')),
+          t.identifier('main')
+        )
+      )
+    );
+    return gen.return(statements);
+  }
+);
+
+const genProgram = genProgramStatements.then(statements =>
+  gen.return(t.program(statements))
+);
+
+const genPrgramWrappedInIife = genProgramStatements.then(statements =>
+  gen.return(
+    t.program([
+      t.expressionStatement(
+        t.callExpression(
+          t.functionExpression(null, [], t.blockStatement(statements)),
+          []
+        )
+      ),
+    ])
+  )
+);
+
+module.exports = {
+  genProgram,
+  genPrgramWrappedInIife,
+};

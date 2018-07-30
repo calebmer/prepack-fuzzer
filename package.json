@@ -4,11 +4,14 @@
   "version": "0.0.0-unversioned",
   "license": "UNLICENSED",
   "scripts": {
-    "sample": "node src/sample.js"
+    "sample": "node src/sample.js",
+    "test": "node src/test.js"
   },
   "dependencies": {
     "@babel/generator": "^7.0.0-beta.55",
     "@babel/types": "^7.0.0-beta.55",
+    "chalk": "^2.4.1",
+    "pretty-ms": "^3.2.0",
     "testcheck": "npm:@calebmer/testcheck@1.0.0-rc.5"
   }
 }

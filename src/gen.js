@@ -18,6 +18,7 @@ function genComputation() {
   function getInitialScope() {
     return {
       variables: [],
+      functions: [],
     };
   }
 
@@ -29,9 +30,9 @@ function genComputation() {
     return name;
   }
 
-  function newFunction() {
+  function newFunction(arity) {
     const name = `f${state.nextFunctionId++}`;
-    state.scopes[state.scopes.length - 1].variables.push({name});
+    state.scopes[state.scopes.length - 1].functions.push({name, arity});
     return name;
   }
 
@@ -81,7 +82,7 @@ function genComputation() {
   // NOTE: This case must be first in `genScalarExpressionWeightedCases` so we
   // can easily take it out.
   genScalarComputationWeightedCases.unshift([
-    20,
+    3,
     gen.null.then(() => {
       let variables = [];
       // Reuse the variables array if we only have one. Otherwise add all scope
@@ -92,7 +93,7 @@ function genComputation() {
         for (let i = 0; i < state.scopes.length; i++) {
           const scope = state.scopes[i];
           for (let k = 0; k < scope.variables.length; k++) {
-            variables.push(scope.variables[k]);
+            variables.push(gen.return(scope.variables[k]));
           }
         }
       }
@@ -301,6 +302,37 @@ function genComputation() {
               expression: t.callExpression(t.identifier(name), []),
             });
           });
+        }),
+      ],
+
+      // f()
+      [
+        5,
+        gen.null.then(() => {
+          let functions = [];
+          // Reuse the functions array if we only have one. Otherwise add all
+          // scope functions to our local functions array.
+          if (state.scopes.length === 1) {
+            functions = state.scopes[0].functions;
+          } else {
+            for (let i = 0; i < state.scopes.length; i++) {
+              const scope = state.scopes[i];
+              for (let k = 0; k < scope.functions.length; k++) {
+                functions.push(gen.return(scope.functions[k]));
+              }
+            }
+          }
+          if (functions.length === 0) {
+            // If we have no functions then gen a computation.
+            return genComputation;
+          } else {
+            return gen.oneOf(functions).then(f =>
+              gen.return({
+                statements: [],
+                expression: t.callExpression(t.identifier(f.name), []),
+              })
+            );
+          }
         }),
       ],
 

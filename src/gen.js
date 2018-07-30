@@ -1,15 +1,26 @@
 const t = require('@babel/types');
 const {gen} = require('testcheck');
 
+const Types = {
+  unknown: 'unknown',
+  nullish: 'nullish',
+  number: 'number',
+  string: 'string',
+  boolean: 'boolean',
+  function0: 'function0',
+};
+
 const genStringLiteral = gen
   .array(gen.asciiChar, {maxSize: 20})
   .then(chars => gen.return(t.stringLiteral(chars.join(''))));
 
-function genComputation(input) {
+function genComputation() {
   function getInitialState() {
     return {
+      declarations: [],
       scopes: [getInitialScope()],
       nextVariableId: 1,
+      nextFunctionId: 1,
     };
   }
 
@@ -21,41 +32,69 @@ function genComputation(input) {
 
   let state = null;
 
-  function newVariable() {
-    const variable = `x${state.nextVariableId++}`;
-    state.scopes[state.scopes.length - 1].variables.push(variable);
-    return variable;
+  function newVariable(type) {
+    const name = `x${state.nextVariableId++}`;
+    state.scopes[state.scopes.length - 1].variables.push({name, type});
+    return name;
   }
 
-  const genScalarExpressionWeightedCases = [
+  function newFunction(type) {
+    const name = `f${state.nextFunctionId++}`;
+    state.scopes[state.scopes.length - 1].variables.push({name, type});
+    return name;
+  }
+
+  const genScalarComputationWeightedCases = [
     // null / undefined
     [
       5,
-      gen.oneOf([
-        gen.return(t.nullLiteral()),
-        gen.return(t.identifier('undefined')),
-      ]),
+      {
+        statements: [],
+        type: gen.return(Types.nullish),
+        expression: gen.oneOf([
+          gen.return(t.nullLiteral()),
+          gen.return(t.identifier('undefined')),
+        ]),
+      },
     ],
 
     // number
-    [1, gen.number.then(n => gen.return(t.numericLiteral(n)))],
+    [
+      1,
+      {
+        statements: [],
+        type: gen.return(Types.number),
+        expression: gen.number.then(n => gen.return(t.numericLiteral(n))),
+      },
+    ],
 
     // string
-    [1, genStringLiteral],
+    [
+      1,
+      {
+        statements: [],
+        type: gen.return(Types.string),
+        expression: genStringLiteral,
+      },
+    ],
 
     // boolean
-    [10, gen.boolean.then(b => gen.return(t.booleanLiteral(b)))],
-
-    // input
-    input && [20, input],
-  ].filter(Boolean);
+    [
+      10,
+      {
+        statements: [],
+        type: gen.return(Types.boolean),
+        expression: gen.boolean.then(b => t.booleanLiteral(b)),
+      },
+    ],
+  ];
 
   // Reuse variable from state
   //
   // NOTE: This case must be first in `genScalarExpressionWeightedCases` so we
   // can easily take it out.
-  genScalarExpressionWeightedCases.unshift([
-    3,
+  genScalarComputationWeightedCases.unshift([
+    20,
     gen.null.then(() => {
       let variables = [];
       // Reuse the variables array if we only have one. Otherwise add all scope
@@ -73,22 +112,21 @@ function genComputation(input) {
       if (variables.length === 0) {
         // If we have no variables then use one of our other scalar
         // expression cases.
-        return gen.oneOfWeighted(genScalarExpressionWeightedCases.slice(1));
+        return gen.oneOfWeighted(genScalarComputationWeightedCases.slice(1));
       } else {
-        return gen.oneOf(variables).then(v => t.identifier(v));
+        return gen.oneOf(variables).then(v =>
+          gen.return({
+            statements: [],
+            type: v.type,
+            expression: t.identifier(v.name),
+          })
+        );
       }
     }),
   ]);
 
-  const genScalarExpression = gen.oneOfWeighted(
-    genScalarExpressionWeightedCases
-  );
-
-  const genScalarComputation = genScalarExpression.then(expression =>
-    gen.return({
-      statements: [],
-      expression,
-    })
+  const genScalarComputation = gen.oneOfWeighted(
+    genScalarComputationWeightedCases
   );
 
   const genComputation = gen.nested(genComputation => {
@@ -117,7 +155,7 @@ function genComputation(input) {
           const conditionReuse =
             (consequent.statements.length !== 0 ||
               alternate.statements.length !== 0) &&
-            t.identifier(newVariable());
+            t.identifier(newVariable(condition.type));
           if (conditionReuse) {
             condition.statements.push(
               t.variableDeclaration('var', [
@@ -148,6 +186,10 @@ function genComputation(input) {
           }
           return gen.return({
             statements: condition.statements,
+            type:
+              consequent.type === alternate.type
+                ? consequent.type
+                : Types.unknown,
             expression: t.conditionalExpression(
               conditionReuse || condition.expression,
               consequent.expression,
@@ -180,7 +222,16 @@ function genComputation(input) {
             returnConsequent,
             returnAlternate,
           }) => {
-            const variable = newVariable();
+            const type =
+              returnConsequent && !returnAlternate
+                ? alternate.type
+                : returnAlternate && !returnConsequent
+                  ? consequent.type
+                  : consequent.type === alternate.type
+                    ? consequent.type
+                    : Types.unknown;
+
+            const variable = newVariable(type);
 
             condition.statements.push(
               t.variableDeclaration('var', [
@@ -227,6 +278,7 @@ function genComputation(input) {
 
             return gen.return({
               statements: condition.statements,
+              type,
               expression: t.identifier(variable),
             });
           }
@@ -236,8 +288,8 @@ function genComputation(input) {
       // var id = init;
       [
         30,
-        genComputation.then(({statements, expression}) => {
-          const variable = newVariable();
+        genComputation.then(({statements, type, expression}) => {
+          const variable = newVariable(type);
           statements.push(
             t.variableDeclaration('var', [
               t.variableDeclarator(t.identifier(variable), expression),
@@ -245,12 +297,45 @@ function genComputation(input) {
           );
           return gen.return({
             statements,
+            type,
             expression: t.identifier(variable),
           });
         }),
       ],
 
-      // Ignored computation.
+      // function f(...args) { body }
+      [
+        15,
+        gen.null.then(() => {
+          // Save old scopes
+          const prevScopes = state.scopes;
+          state.scopes = [getInitialScope()];
+
+          return genComputation.then(computation => {
+            // Restore old scopes
+            state.scopes = prevScopes;
+
+            computation.statements.push(
+              t.returnStatement(computation.expression)
+            );
+            const type = Types.function0;
+            const name = newFunction(type);
+            const declaration = t.functionDeclaration(
+              t.identifier(name),
+              [],
+              t.blockStatement(computation.statements)
+            );
+            state.declarations.push(declaration);
+            return gen.return({
+              statements: [],
+              type: computation.type,
+              expression: t.callExpression(t.identifier(name), []),
+            });
+          });
+        }),
+      ],
+
+      // ignored; computation
       [
         1,
         gen([genComputation, genComputation]).then(([ignored, computation]) => {
@@ -259,6 +344,7 @@ function genComputation(input) {
           pushAll(statements, computation.statements);
           return gen.return({
             statements,
+            type: computation.type,
             expression: computation.expression,
           });
         }),
@@ -275,8 +361,9 @@ function genComputation(input) {
       return genComputation;
     })
     .then(computation => {
+      const {declarations} = state;
       state = null;
-      return gen.return(computation);
+      return gen.return({declarations, computation});
     });
 }
 

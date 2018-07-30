@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "name": "prepack-react-quickcheck",
+  "version": "0.0.0-unversioned",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "testcheck": "npm:@calebmer/testcheck@1.0.0-rc.5"
+  }
+}

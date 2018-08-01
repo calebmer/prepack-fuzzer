@@ -15,9 +15,23 @@ const StateRecord = Immutable.Record({
   nextArgumentId: 1,
 });
 
-const genStringLiteral = gen
+const genString = gen
   .array(gen.asciiChar, {maxSize: 20})
-  .then(chars => gen.return(t.stringLiteral(chars.join(''))));
+  .then(chars => chars.join(''));
+
+const genValue = gen.oneOfWeighted([
+  // null / undefined
+  [1, gen.oneOf([gen.return(null), gen.return(undefined)])],
+
+  // number
+  [1, gen.number],
+
+  // string
+  [1, genString],
+
+  // boolean
+  [7, gen.boolean],
+]);
 
 function genComputation() {
   const _getStateSymbol = Symbol('getState');
@@ -77,34 +91,39 @@ function genComputation() {
   }
 
   const genScalarComputation = gen.oneOfWeighted([
-    // null / undefined
-    [
-      5,
-      gen
-        .oneOf([
-          gen.return(t.nullLiteral()),
-          gen.return(t.identifier('undefined')),
-        ])
-        .then(wrapExpression),
-    ],
-
-    // number
     [
       1,
-      gen.number
-        .then(n => gen.return(t.numericLiteral(n)))
-        .then(wrapExpression),
+      genValue.then(rawValue => {
+        let value;
+        if (rawValue === null) {
+          value = t.nullLiteral();
+        } else if (rawValue === undefined) {
+          value = t.identifier('undefined');
+        } else if (typeof rawValue === 'number') {
+          value = t.numericLiteral(rawValue);
+        } else if (typeof rawValue === 'string') {
+          value = t.stringLiteral(rawValue);
+        } else if (typeof rawValue === 'boolean') {
+          value = t.booleanLiteral(rawValue);
+        } else {
+          throw new Error(`Unexpected value: ${rawValue}`);
+        }
+        const result = {
+          statements: Immutable.List(),
+          expression: value,
+        };
+        return {
+          args: 0,
+          *computation() {
+            return result;
+          },
+        };
+      }),
     ],
-
-    // string
-    [1, genStringLiteral.then(wrapExpression)],
-
-    // boolean
-    [10, gen.boolean.then(b => t.booleanLiteral(b)).then(wrapExpression)],
 
     // Reuse variable
     [
-      15,
+      2,
       gen.posInt.then(n => ({
         args: 0,
         *computation() {
@@ -131,7 +150,7 @@ function genComputation() {
 
     // Argument
     [
-      20,
+      4,
       gen.return({
         args: 1,
         *computation() {
@@ -147,16 +166,20 @@ function genComputation() {
     // // Intentional failure. Uncomment this to test if everything is working.
     // [
     //   1,
-    //   gen.return(
-    //     t.conditionalExpression(
-    //       t.memberExpression(
-    //         t.identifier('global'),
-    //         t.identifier('__optimize')
-    //       ),
-    //       t.booleanLiteral(true),
-    //       t.booleanLiteral(false)
-    //     )
-    //   ),
+    //   gen.return({
+    //     args: 0,
+    //     *computation() {
+    //       const expression = t.conditionalExpression(
+    //         t.memberExpression(
+    //           t.identifier('global'),
+    //           t.identifier('__optimize')
+    //         ),
+    //         t.booleanLiteral(true),
+    //         t.booleanLiteral(false)
+    //       );
+    //       return {statements: Immutable.List(), expression};
+    //     },
+    //   }),
     // ],
   ]);
 
@@ -444,63 +467,76 @@ function genComputation() {
   });
 }
 
-const genProgramStatements = genComputation().then(
-  ({
-    args,
-    computation: {statements: mainStatements, expression: mainExpression},
-    declarations,
-  }) => {
-    mainStatements = mainStatements.push(t.returnStatement(mainExpression));
-    const statements = [];
-    statements.push(t.expressionStatement(t.stringLiteral('use strict')));
-    declarations.forEach(declaration => {
-      statements.push(declaration);
-    });
-    statements.push(
-      t.functionDeclaration(
-        t.identifier('main'),
-        Array(args)
-          .fill(null)
-          .map((_, i) => t.identifier(`a${i + 1}`)),
-        t.blockStatement(mainStatements.toArray())
-      )
-    );
-    statements.push(
-      t.ifStatement(
-        t.memberExpression(t.identifier('global'), t.identifier('__optimize')),
+const genProgramStatements = genComputation()
+  .then(
+    ({
+      args,
+      computation: {statements: mainStatements, expression: mainExpression},
+      declarations,
+    }) => {
+      mainStatements = mainStatements.push(t.returnStatement(mainExpression));
+      const statements = [];
+      statements.push(t.expressionStatement(t.stringLiteral('use strict')));
+      declarations.forEach(declaration => {
+        statements.push(declaration);
+      });
+      statements.push(
+        t.functionDeclaration(
+          t.identifier('main'),
+          Array(args)
+            .fill(null)
+            .map((_, i) => t.identifier(`a${i + 1}`)),
+          t.blockStatement(mainStatements.toArray())
+        )
+      );
+      statements.push(
+        t.ifStatement(
+          t.memberExpression(
+            t.identifier('global'),
+            t.identifier('__optimize')
+          ),
+          t.expressionStatement(
+            t.callExpression(t.identifier('__optimize'), [t.identifier('main')])
+          )
+        )
+      );
+      statements.push(
         t.expressionStatement(
-          t.callExpression(t.identifier('__optimize'), [t.identifier('main')])
+          t.assignmentExpression(
+            '=',
+            t.memberExpression(t.identifier('module'), t.identifier('exports')),
+            t.identifier('main')
+          )
         )
-      )
-    );
-    statements.push(
-      t.expressionStatement(
-        t.assignmentExpression(
-          '=',
-          t.memberExpression(t.identifier('module'), t.identifier('exports')),
-          t.identifier('main')
-        )
-      )
-    );
-    return gen.return(statements);
-  }
+      );
+      return gen.return({args, statements});
+    }
+  )
+  .then(({args, statements}) => ({
+    // Generate 5 argument test cases for every argument.
+    args: gen.array(gen.array(genValue, {size: args}), {size: args * 5}),
+    statements: gen.return(statements),
+  }));
+
+const genProgram = genProgramStatements.then(({args, statements}) =>
+  gen.return({
+    args,
+    program: t.program(statements),
+  })
 );
 
-const genProgram = genProgramStatements.then(statements =>
-  gen.return(t.program(statements))
-);
-
-const genPrgramWrappedInIife = genProgramStatements.then(statements =>
-  gen.return(
-    t.program([
+const genPrgramWrappedInIife = genProgramStatements.then(({args, statements}) =>
+  gen.return({
+    args,
+    program: t.program([
       t.expressionStatement(
         t.callExpression(
           t.functionExpression(null, [], t.blockStatement(statements)),
           []
         )
       ),
-    ])
-  )
+    ]),
+  })
 );
 
 module.exports = {

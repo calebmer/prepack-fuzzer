@@ -1,7 +1,6 @@
-const vm = require('vm');
 const generate = require('@babel/generator').default;
 const {gen, property} = require('testcheck');
-const {prepackSources} = require('/Users/calebmer/prepack/lib/prepack-node.js');
+const {executeNormal, executePrepack} = require('./execute');
 const {genPrgramWrappedInIife} = require('./gen');
 const {ReportStatus, reportTestFinish} = require('./report');
 
@@ -14,42 +13,35 @@ let size;
 const prepackWorks = property(
   gen.sized(genSize => {
     size = genSize;
-    return genPrgramWrappedInIife.then(program => generate(program).code);
+    return genPrgramWrappedInIife.then(({args, program}) =>
+      gen.return({
+        args,
+        code: generate(program).code,
+      })
+    );
   }),
-  code => {
+  ({args, code}) => {
     const start = Date.now();
     try {
-      let expected;
-      let expectedError;
-      {
-        const context = createVmContext();
-        vm.runInContext(code, context);
-        try {
-          expected = context.module.exports();
-        } catch (error) {
-          expectedError = error;
+      const expected = executeNormal(args, code);
+      const actual = executePrepack(args, code);
+
+      let ok = true;
+      for (let i = 0; i < expected.length; i++) {
+        const expectedResult = expected[i];
+        const actualResult = actual[i];
+        if (expectedResult.error) {
+          if (!actualResult.error) {
+            ok = false;
+            break;
+          }
+        } else {
+          if (expectedResult.value !== actualResult.value) {
+            ok = false;
+            break;
+          }
         }
       }
-
-      let actual;
-      let actualError;
-      {
-        const prepackedCode = prepackSources(
-          [{fileContents: code, filePath: 'test.js'}],
-          prepackOptions
-        ).code;
-        const context = createVmContext();
-        vm.runInContext(prepackedCode, context);
-        try {
-          actual = context.module.exports();
-        } catch (error) {
-          actualError = error;
-        }
-      }
-
-      const ok = expectedError
-        ? !!expectedError && !!actualError
-        : expected === actual;
 
       const end = Date.now();
       const time = end - start;
@@ -62,7 +54,7 @@ const prepackWorks = property(
 
       if (error.message.includes('timed out')) {
         // Ignore programs which time out.
-        reportTestFinish(time, size, ReportStatus.timeout);
+        reportTestFinish(time, size, ReportStatus.skip);
         return true;
       } else {
         reportTestFinish(time, size, ReportStatus.fail);
@@ -71,36 +63,6 @@ const prepackWorks = property(
     }
   }
 );
-
-function createVmContext() {
-  const sandbox = {
-    module: {exports: {}},
-  };
-  sandbox.global = sandbox;
-  return vm.createContext(sandbox);
-}
-
-const prepackOptions = {
-  errorHandler: diag => {
-    if (diag.severity === 'Information') return 'Recover';
-    if (diag.errorCode === 'PP0025') return 'Recover';
-    if (diag.severity !== 'Warning') return 'Fail';
-    return 'Recover';
-  },
-  compatibility: 'fb-www',
-  internalDebug: true,
-  serialize: true,
-  uniqueSuffix: '',
-  maxStackDepth: 100,
-  instantRender: false,
-  reactEnabled: true,
-  reactOutput: 'create-element',
-  reactVerbose: true,
-  reactOptimizeNestedFunctions: false,
-  inlineExpressions: true,
-  invariantLevel: 0,
-  abstractValueImpliesMax: 1000,
-};
 
 module.exports = {
   prepackWorks,

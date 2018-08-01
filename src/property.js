@@ -14,13 +14,11 @@ let size;
 const prepackWorks = property(
   gen.sized(genSize => {
     size = genSize;
-    return genPrgramWrappedInIife;
+    return genPrgramWrappedInIife.then(program => generate(program).code);
   }),
-  program => {
+  code => {
     const start = Date.now();
     try {
-      const code = generate(program).code;
-
       let expected;
       let expectedError;
       {
@@ -68,7 +66,7 @@ const prepackWorks = property(
         return true;
       } else {
         reportTestFinish(time, size, ReportStatus.fail);
-        throw error;
+        return false;
       }
     }
   }
@@ -78,6 +76,7 @@ function createVmContext() {
   const sandbox = {
     module: {exports: {}},
   };
+  sandbox.global = sandbox;
   return vm.createContext(sandbox);
 }
 

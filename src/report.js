@@ -26,11 +26,16 @@ function reportTestFinish(time, size, status) {
 }
 
 function reportDivider(error = false) {
-  const divider = '┈'.repeat(process.stdout.columns);
-  console.log(error ? chalk.red(divider) : chalk.dim(divider));
+  const divider = chalk.dim('┈'.repeat(process.stdout.columns));
+  if (error) {
+    console.error(divider);
+  } else {
+    console.log(divider);
+  }
 }
 
 module.exports = {
+  ReportStatus,
   passIcon: statusIcon.pass,
   failIcon: statusIcon.fail,
   reportTestFinish,

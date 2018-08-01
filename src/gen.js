@@ -2,48 +2,68 @@ const t = require('@babel/types');
 const Immutable = require('immutable');
 const {gen} = require('testcheck');
 
+const ScopeRecord = Immutable.Record({
+  variables: Immutable.List([]),
+  functions: Immutable.List([]),
+});
+
+const StateRecord = Immutable.Record({
+  declarations: Immutable.List(),
+  scopes: Immutable.List([ScopeRecord()]),
+  nextVariableId: 1,
+  nextFunctionId: 1,
+  arguments: null,
+});
+
 const genStringLiteral = gen
   .array(gen.asciiChar, {maxSize: 20})
   .then(chars => gen.return(t.stringLiteral(chars.join(''))));
 
 function genComputation() {
-  function getInitialState() {
-    return {
-      declarations: [],
-      scopes: [getInitialScope()],
-      nextVariableId: 1,
-      nextFunctionId: 1,
-      arguments: null,
-    };
+  const _getStateSymbol = Symbol('getState');
+
+  function* getState() {
+    return yield _getStateSymbol;
   }
 
-  function getInitialScope() {
-    return {
-      variables: [],
-      functions: [],
-    };
+  function* putState(nextState) {
+    yield nextState;
   }
 
-  let state = null;
+  function* replaceState(f) {
+    yield f(yield _getStateSymbol);
+  }
 
-  function newVariable() {
-    const name = `x${state.nextVariableId++}`;
-    state.scopes[state.scopes.length - 1].variables.push({name});
+  function* newVariable() {
+    let state = yield* getState();
+    const name = `x${state.nextVariableId}`;
+    state = state
+      .update('nextVariableId', x => x + 1)
+      .updateIn(['scopes', -1, 'variables'], vs => vs.push({name}));
+    yield* putState(state);
     return name;
   }
 
-  function newFunction(arity) {
-    const name = `f${state.nextFunctionId++}`;
-    state.scopes[state.scopes.length - 1].functions.push({name, arity});
+  function* newFunction(arity) {
+    let state = yield* getState();
+    const name = `f${state.nextFunctionId}`;
+    state = state
+      .update('nextFunctionId', x => x + 1)
+      .updateIn(['scopes', -1, 'functions'], fs => fs.push({name, arity}));
+    yield* putState(state);
     return name;
   }
 
-  function newArgument() {
+  function* newArgument() {
+    let state = yield* getState();
     if (state.arguments === null) {
       return null;
     } else {
-      const name = `a${state.arguments++ + 1}`;
-      state.scopes[state.scopes.length - 1].variables.push({name});
+      const name = `a${state.arguments}`;
+      state = state
+        .update('arguments', x => x + 1)
+        .updateIn(['scopes', -1, 'variables'], vs => vs.push({name}));
+      yield* putState(state);
       return name;
     }
   }
@@ -71,356 +91,393 @@ function genComputation() {
   const genScalarExpression = gen.oneOfWeighted([
     ...genScalarExpressionWeightedCases,
 
-    // Reuse variable
-    [
-      5,
-      gen.null.then(() => {
-        let variables = [];
-        // Reuse the variables array if we only have one. Otherwise add all scope
-        // variables to our local variables array.
-        if (state.scopes.length === 1) {
-          variables = state.scopes[0].variables;
-        } else {
-          for (let i = 0; i < state.scopes.length; i++) {
-            const scope = state.scopes[i];
-            for (let k = 0; k < scope.variables.length; k++) {
-              variables.push(gen.return(scope.variables[k]));
-            }
-          }
-        }
-        if (variables.length === 0) {
-          return gen.oneOfWeighted(genScalarExpressionWeightedCases);
-        } else {
-          return gen
-            .oneOf(variables)
-            .then(v => gen.return(t.identifier(v.name)));
-        }
-      }),
-    ],
+    // // Reuse variable
+    // [
+    //   5,
+    //   gen.null.then(() => {
+    //     let variables = [];
+    //     // Reuse the variables array if we only have one. Otherwise add all scope
+    //     // variables to our local variables array.
+    //     if (state.scopes.length === 1) {
+    //       variables = state.scopes[0].variables;
+    //     } else {
+    //       for (let i = 0; i < state.scopes.length; i++) {
+    //         const scope = state.scopes[i];
+    //         for (let k = 0; k < scope.variables.length; k++) {
+    //           variables.push(gen.return(scope.variables[k]));
+    //         }
+    //       }
+    //     }
+    //     if (variables.length === 0) {
+    //       return gen.oneOfWeighted(genScalarExpressionWeightedCases);
+    //     } else {
+    //       return gen
+    //         .oneOf(variables)
+    //         .then(v => gen.return(t.identifier(v.name)));
+    //     }
+    //   }),
+    // ],
 
-    // Function argument
-    [
-      20,
-      gen.null.then(() => {
-        const argument = newArgument();
-        if (argument === null) {
-          return gen.oneOfWeighted(genScalarExpressionWeightedCases);
-        } else {
-          return gen.return(t.identifier(argument));
-        }
-      }),
-    ],
+    // // Function argument
+    // [
+    //   20,
+    //   gen.null.then(() => {
+    //     const argument = newArgument();
+    //     if (argument === null) {
+    //       return gen.oneOfWeighted(genScalarExpressionWeightedCases);
+    //     } else {
+    //       return gen.return(t.identifier(argument));
+    //     }
+    //   }),
+    // ],
   ]);
 
-  const genScalarComputation = genScalarExpression.then(expression =>
-    gen.return({
-      statements: Immutable.List(),
-      expression,
-    })
+  const genScalarComputation = genScalarExpression.then(
+    expression =>
+      function*() {
+        return {
+          statements: Immutable.List(),
+          expression,
+        };
+      }
   );
 
-  const genComputation = gen.nested(genComputation => {
-    // Hack in scope tracking by pushing/popping state.
-    const genConditionalComputation = gen.null
-      .then(() => {
-        state.scopes.push(getInitialScope());
-        return genComputation;
-      })
-      .then(computation => {
-        state.scopes.pop();
-        return gen.return(computation);
-      });
+  function* conditional(computation) {
+    yield* replaceState(state =>
+      state.update('scopes', scopes => scopes.push(ScopeRecord()))
+    );
+    const result = yield* computation();
+    yield* replaceState(state => state.update('scopes', scope => scope.pop()));
+    return result;
+  }
 
-    return gen.oneOfWeighted([
-      // condition ? consequent : alternate
-      [
-        5,
-        gen({
-          condition: genComputation,
-          consequent: genConditionalComputation,
-          alternate: genConditionalComputation,
-        }).then(({condition, consequent, alternate}) => {
-          let statements = condition.statements;
-          // If our consequent and/or alternate have statements then we need to
-          // hoist these statements to an if-statement.
-          const conditionReuse =
-            (!consequent.statements.isEmpty() ||
-              !alternate.statements.isEmpty()) &&
-            t.identifier(newVariable());
-          if (conditionReuse) {
-            statements = statements.push(
-              t.variableDeclaration('var', [
-                t.variableDeclarator(conditionReuse, condition.expression),
-              ])
-            );
-            if (
-              consequent.statements.isEmpty() &&
-              !alternate.statements.isEmpty()
-            ) {
-              statements = statements.push(
-                t.ifStatement(
-                  t.unaryExpression('!', conditionReuse),
-                  t.blockStatement(alternate.statements.toArray())
-                )
-              );
-            } else {
-              statements = statements.push(
-                t.ifStatement(
-                  conditionReuse,
-                  t.blockStatement(consequent.statements.toArray()),
-                  alternate.statements.size === 0
-                    ? undefined
-                    : t.blockStatement(alternate.statements.toArray())
-                )
-              );
-            }
-          }
-          return gen.return({
-            statements,
-            expression: t.conditionalExpression(
-              conditionReuse || condition.expression,
-              consequent.expression,
-              alternate.expression
-            ),
-          });
-        }),
-      ],
+  const genComputation = gen.nested(
+    genComputation =>
+      gen.oneOfWeighted([
+        // condition ? consequent : alternate
+        [
+          5,
+          gen({
+            conditionComputation: genComputation,
+            consequentComputation: genComputation,
+            alternateComputation: genComputation,
+          }).then(
+            ({
+              conditionComputation,
+              consequentComputation,
+              alternateComputation,
+            }) =>
+              function*() {
+                const condition = yield* conditionComputation();
+                let statements = condition.statements;
 
-      // if (condition) { consequent } else { alternate }
-      [
-        10,
-        gen({
-          condition: genComputation,
-          consequent: genConditionalComputation,
-          alternate: genConditionalComputation,
-          returnConsequent: gen.oneOfWeighted([
-            [1, gen.return(true)],
-            [3, gen.return(false)],
-          ]),
-          returnAlternate: gen.oneOfWeighted([
-            [1, gen.return(true)],
-            [3, gen.return(false)],
-          ]),
-        }).then(
-          ({
-            condition: {statements, expression: conditionExpression},
-            consequent: {
-              statements: consequentStatements,
-              expression: consequentExpression,
-            },
-            alternate: {
-              statements: alternateStatements,
-              expression: alternateExpression,
-            },
-            returnConsequent,
-            returnAlternate,
-          }) => {
-            const variable = newVariable();
+                // Conditionally generate consequent and alternate.
+                const consequent = yield* conditional(consequentComputation);
+                const alternate = yield* conditional(alternateComputation);
 
-            statements = statements.push(
-              t.variableDeclaration('var', [
-                t.variableDeclarator(t.identifier(variable)),
-              ])
-            );
-            if (returnConsequent) {
-              consequentStatements = consequentStatements.push(
-                t.returnStatement(consequentExpression)
-              );
-            } else {
-              consequentStatements = consequentStatements.push(
-                t.expressionStatement(
-                  t.assignmentExpression(
-                    '=',
-                    t.identifier(variable),
-                    consequentExpression
-                  )
-                )
-              );
-            }
-            if (returnAlternate) {
-              alternateStatements = alternateStatements.push(
-                t.returnStatement(alternateExpression)
-              );
-            } else {
-              alternateStatements = alternateStatements.push(
-                t.expressionStatement(
-                  t.assignmentExpression(
-                    '=',
-                    t.identifier(variable),
-                    alternateExpression
-                  )
-                )
-              );
-            }
-            statements = statements.push(
-              t.ifStatement(
-                conditionExpression,
-                t.blockStatement(consequentStatements.toArray()),
-                t.blockStatement(alternateStatements.toArray())
-              )
-            );
+                // If our consequent and/or alternate have statements then we need to
+                // hoist these statements to an if-statement.
+                const conditionReuse =
+                  (!consequent.statements.isEmpty() ||
+                    !alternate.statements.isEmpty()) &&
+                  t.identifier(yield* newVariable());
 
-            return gen.return({
-              statements,
-              expression: t.identifier(variable),
-            });
-          }
-        ),
-      ],
-
-      // var id = init;
-      [
-        20,
-        genComputation.then(({statements, expression}) => {
-          const variable = newVariable();
-          return gen.return({
-            statements: statements.push(
-              t.variableDeclaration('var', [
-                t.variableDeclarator(t.identifier(variable), expression),
-              ])
-            ),
-            expression: t.identifier(variable),
-          });
-        }),
-      ],
-
-      // function f(...args) { body }
-      [
-        15,
-        gen.null.then(() => {
-          // Save old stuff
-          const prevArguments = state.arguments;
-          const prevScopes = state.scopes;
-
-          // Set new stuff
-          state.arguments = 0;
-          state.scopes = [getInitialScope()];
-
-          return genComputation
-            .then(computation => {
-              // Save new stuff
-              const argumentsCount = state.arguments;
-
-              // Restore old stuff
-              state.arguments = prevArguments;
-              state.scopes = prevScopes;
-
-              // Generate arguments in old scope.
-              return {
-                computation: gen.return(computation),
-                args: Array(argumentsCount).fill(genComputation),
-              };
-            })
-            .then(
-              ({
-                computation: {
-                  statements: functionStatements,
-                  expression: functionExpression,
-                },
-                args,
-              }) => {
-                functionStatements = functionStatements.push(
-                  t.returnStatement(functionExpression)
-                );
-                const name = newFunction(args.length);
-                const declaration = t.functionDeclaration(
-                  t.identifier(name),
-                  args.map((c, i) => t.identifier(`a${i + 1}`)),
-                  t.blockStatement(functionStatements.toArray())
-                );
-                state.declarations.push(declaration);
-
-                const statements = Immutable.List().concat(
-                  ...args.map(c => c.statements)
-                );
-                return gen.return({
+                if (conditionReuse) {
+                  statements = statements.push(
+                    t.variableDeclaration('var', [
+                      t.variableDeclarator(
+                        conditionReuse,
+                        condition.expression
+                      ),
+                    ])
+                  );
+                  if (
+                    consequent.statements.isEmpty() &&
+                    !alternate.statements.isEmpty()
+                  ) {
+                    statements = statements.push(
+                      t.ifStatement(
+                        t.unaryExpression('!', conditionReuse),
+                        t.blockStatement(alternate.statements.toArray())
+                      )
+                    );
+                  } else {
+                    statements = statements.push(
+                      t.ifStatement(
+                        conditionReuse,
+                        t.blockStatement(consequent.statements.toArray()),
+                        alternate.statements.size === 0
+                          ? undefined
+                          : t.blockStatement(alternate.statements.toArray())
+                      )
+                    );
+                  }
+                }
+                return {
                   statements,
-                  expression: t.callExpression(
-                    t.identifier(name),
-                    args.map(c => c.expression)
+                  expression: t.conditionalExpression(
+                    conditionReuse || condition.expression,
+                    consequent.expression,
+                    alternate.expression
                   ),
-                });
+                };
               }
-            );
-        }),
-      ],
+          ),
+        ],
 
-      // f(...args)
-      [
-        5,
-        gen.null.then(() => {
-          let functions = [];
-          // Reuse the functions array if we only have one. Otherwise add all
-          // scope functions to our local functions array.
-          if (state.scopes.length === 1) {
-            functions = state.scopes[0].functions;
-          } else {
-            for (let i = 0; i < state.scopes.length; i++) {
-              const scope = state.scopes[i];
-              for (let k = 0; k < scope.functions.length; k++) {
-                functions.push(gen.return(scope.functions[k]));
-              }
-            }
-          }
-          if (functions.length === 0) {
-            // If we have no functions then gen a computation.
-            return genComputation;
-          } else {
-            return gen
-              .oneOf(functions)
-              .then(f => {
-                const args = Array(f.arity);
-                args.fill(genComputation);
-                return [gen.return(f), args];
-              })
-              .then(([f, args]) => {
-                const statements = Immutable.List().concat(
-                  ...args.map(c => c.statements)
+        // if (condition) { consequent } else { alternate }
+        [
+          10,
+          gen({
+            conditionComputation: genComputation,
+            consequentComputation: genComputation,
+            alternateComputation: genComputation,
+            returnConsequent: gen.oneOfWeighted([
+              [1, gen.return(true)],
+              [3, gen.return(false)],
+            ]),
+            returnAlternate: gen.oneOfWeighted([
+              [1, gen.return(true)],
+              [3, gen.return(false)],
+            ]),
+          }).then(
+            ({
+              conditionComputation,
+              consequentComputation,
+              alternateComputation,
+              returnConsequent,
+              returnAlternate,
+            }) =>
+              function*() {
+                const condition = yield* conditionComputation();
+                const variable = yield* newVariable();
+                const consequent = yield* conditional(consequentComputation);
+                const alternate = yield* conditional(alternateComputation);
+
+                let {statements} = condition;
+                let consequentStatements = consequent.statements;
+                let alternateStatements = alternate.statements;
+
+                statements = statements.push(
+                  t.variableDeclaration('var', [
+                    t.variableDeclarator(t.identifier(variable)),
+                  ])
                 );
-                return gen.return({
+
+                if (returnConsequent) {
+                  consequentStatements = consequentStatements.push(
+                    t.returnStatement(consequent.expression)
+                  );
+                } else {
+                  consequentStatements = consequentStatements.push(
+                    t.expressionStatement(
+                      t.assignmentExpression(
+                        '=',
+                        t.identifier(variable),
+                        consequent.expression
+                      )
+                    )
+                  );
+                }
+                if (returnAlternate) {
+                  alternateStatements = alternateStatements.push(
+                    t.returnStatement(alternate.expression)
+                  );
+                } else {
+                  alternateStatements = alternateStatements.push(
+                    t.expressionStatement(
+                      t.assignmentExpression(
+                        '=',
+                        t.identifier(variable),
+                        alternate.expression
+                      )
+                    )
+                  );
+                }
+                statements = statements.push(
+                  t.ifStatement(
+                    condition.expression,
+                    t.blockStatement(consequentStatements.toArray()),
+                    t.blockStatement(alternateStatements.toArray())
+                  )
+                );
+
+                return {
                   statements,
-                  expression: t.callExpression(
-                    t.identifier(f.name),
-                    args.map(c => c.expression)
+                  expression: t.identifier(variable),
+                };
+              }
+          ),
+        ],
+
+        // var id = init;
+        [
+          20,
+          genComputation.then(
+            computation =>
+              function*() {
+                const {statements, expression} = yield* computation();
+                const variable = yield* newVariable();
+                return {
+                  statements: statements.push(
+                    t.variableDeclaration('var', [
+                      t.variableDeclarator(t.identifier(variable), expression),
+                    ])
                   ),
-                });
-              });
-          }
-        }),
-      ],
+                  expression: t.identifier(variable),
+                };
+              }
+          ),
+        ],
 
-      // ignored; computation
-      [
-        1,
-        gen([genComputation, genComputation]).then(
-          ([
-            {statements: ignoredStatements, expression: ignoredExpression},
-            {statements, expression},
-          ]) =>
-            gen.return({
-              statements: ignoredStatements
-                .push(t.expressionStatement(ignoredExpression))
-                .concat(statements),
-              expression,
-            })
-        ),
-      ],
-    ]);
-  }, genScalarComputation);
+        // // function f(...args) { body }
+        // [
+        //   15,
+        //   gen.null.then(() => {
+        //     // Save old stuff
+        //     const prevArguments = state.arguments;
+        //     const prevScopes = state.scopes;
 
-  // Hack in some state that resets for each test case since the API does not
-  // explicitly provide us this. Depends on entire test cases being
-  // generated synchronously.
-  return gen.null
-    .then(() => {
-      state = getInitialState();
-      return genComputation;
-    })
-    .then(computation => {
-      const {declarations} = state;
-      state = null;
-      return gen.return({declarations, computation});
-    });
+        //     // Set new stuff
+        //     state.arguments = 0;
+        //     state.scopes = [getInitialScope()];
+
+        //     return genComputation
+        //       .then(computation => {
+        //         // Save new stuff
+        //         const argumentsCount = state.arguments;
+
+        //         // Restore old stuff
+        //         state.arguments = prevArguments;
+        //         state.scopes = prevScopes;
+
+        //         // Generate arguments in old scope.
+        //         return {
+        //           computation: gen.return(computation),
+        //           args: Array(argumentsCount).fill(genComputation),
+        //         };
+        //       })
+        //       .then(
+        //         ({
+        //           computation: {
+        //             statements: functionStatements,
+        //             expression: functionExpression,
+        //           },
+        //           args,
+        //         }) => {
+        //           functionStatements = functionStatements.push(
+        //             t.returnStatement(functionExpression)
+        //           );
+        //           const name = newFunction(args.length);
+        //           const declaration = t.functionDeclaration(
+        //             t.identifier(name),
+        //             args.map((c, i) => t.identifier(`a${i + 1}`)),
+        //             t.blockStatement(functionStatements.toArray())
+        //           );
+        //           state.declarations.push(declaration);
+
+        //           const statements = Immutable.List().concat(
+        //             ...args.map(c => c.statements)
+        //           );
+        //           return gen.return({
+        //             statements,
+        //             expression: t.callExpression(
+        //               t.identifier(name),
+        //               args.map(c => c.expression)
+        //             ),
+        //           });
+        //         }
+        //       );
+        //   }),
+        // ],
+
+        // // f(...args)
+        // [
+        //   5,
+        //   gen.null.then(() => {
+        //     let functions = [];
+        //     // Reuse the functions array if we only have one. Otherwise add all
+        //     // scope functions to our local functions array.
+        //     if (state.scopes.length === 1) {
+        //       functions = state.scopes[0].functions;
+        //     } else {
+        //       for (let i = 0; i < state.scopes.length; i++) {
+        //         const scope = state.scopes[i];
+        //         for (let k = 0; k < scope.functions.length; k++) {
+        //           functions.push(gen.return(scope.functions[k]));
+        //         }
+        //       }
+        //     }
+        //     if (functions.length === 0) {
+        //       // If we have no functions then gen a computation.
+        //       return genComputation;
+        //     } else {
+        //       return gen
+        //         .oneOf(functions)
+        //         .then(f => {
+        //           const args = Array(f.arity);
+        //           args.fill(genComputation);
+        //           return [gen.return(f), args];
+        //         })
+        //         .then(([f, args]) => {
+        //           const statements = Immutable.List().concat(
+        //             ...args.map(c => c.statements)
+        //           );
+        //           return gen.return({
+        //             statements,
+        //             expression: t.callExpression(
+        //               t.identifier(f.name),
+        //               args.map(c => c.expression)
+        //             ),
+        //           });
+        //         });
+        //     }
+        //   }),
+        // ],
+
+        // ignored; computation
+        [
+          1,
+          gen([genComputation, genComputation]).then(
+            ([ignoredComputation, computation]) =>
+              function*() {
+                const {
+                  statements: ignoredStatements,
+                  expression: ignoredExpression,
+                } = yield* ignoredComputation();
+                const {statements, expression} = yield* computation();
+                return {
+                  statements: ignoredStatements
+                    .push(t.expressionStatement(ignoredExpression))
+                    .concat(statements),
+                  expression,
+                };
+              }
+          ),
+        ],
+      ]),
+    genScalarComputation
+  );
+
+  // Runer for the state monad we use for computations. We want to use some
+  // state in our computations. This is why we use a monad.
+  return genComputation.then(computation => {
+    const generator = computation();
+    let state = StateRecord();
+    let step = generator.next();
+    while (!step.done) {
+      if (step.value === _getStateSymbol) {
+        step = generator.next(state);
+      } else {
+        state = step.value;
+        step = generator.next();
+      }
+    }
+    return {
+      declarations: state.declarations,
+      computation: step.value,
+    };
+  });
 }
 
 const genProgramStatements = genComputation().then(

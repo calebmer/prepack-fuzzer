@@ -4,22 +4,17 @@ const {executeNormal, executePrepack} = require('./execute');
 const {genPrgramWrappedInIife} = require('./gen');
 const {ReportStatus, reportTestFinish} = require('./report');
 
-let size;
-
 /**
  * Tests if the output of a Prepacked program is the same as the output of the
  * un-Prepacked program.
  */
 const prepackWorks = property(
-  gen.sized(genSize => {
-    size = genSize;
-    return genPrgramWrappedInIife.then(({args, program}) =>
-      gen.return({
-        args,
-        code: generate(program).code,
-      })
-    );
-  }),
+  genPrgramWrappedInIife.then(({args, program}) =>
+    gen.return({
+      args,
+      code: generate(program).code,
+    })
+  ),
   ({args, code}) => {
     const start = Date.now();
     try {
@@ -45,7 +40,7 @@ const prepackWorks = property(
 
       const end = Date.now();
       const time = end - start;
-      reportTestFinish(time, size, ok ? ReportStatus.pass : ReportStatus.fail);
+      reportTestFinish(time, ok ? ReportStatus.pass : ReportStatus.fail);
 
       return ok;
     } catch (error) {
@@ -54,10 +49,10 @@ const prepackWorks = property(
 
       if (error.message.includes('timed out')) {
         // Ignore programs which time out.
-        reportTestFinish(time, size, ReportStatus.skip);
+        reportTestFinish(time, ReportStatus.skip);
         return true;
       } else {
-        reportTestFinish(time, size, ReportStatus.fail);
+        reportTestFinish(time, ReportStatus.fail);
         return false;
       }
     }

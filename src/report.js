@@ -1,3 +1,4 @@
+const util = require('util');
 const chalk = require('chalk');
 const prettyMs = require('pretty-ms');
 
@@ -21,10 +22,29 @@ const statusVerb = {
 
 const divider = chalk.dim('┈'.repeat(process.stdout.columns));
 
-function reportTestFinish(time, size, status) {
+function reportTestFinish(time, status) {
   const icon = statusIcon[status];
   const verb = statusVerb[status];
-  console.log(`${icon} Test of size ${size} ${verb} in ${prettyMs(time)}`);
+  console.log(`${icon} Test ${verb} in ${prettyMs(time)}`);
+}
+
+function reportFailedResults(args, expected, actual) {
+  let first = true;
+  args.forEach((args, i) => {
+    if (expected[i].value !== actual[i].value) {
+      if (!first) {
+        console.error();
+      }
+      first = false;
+      console.error(`${chalk.dim('Arguments:')} ${inspect(args)}`);
+      console.error(` ${chalk.dim('Expected:')} ${inspect(expected[i].value)}`);
+      console.error(`   ${chalk.dim('Actual:')} ${inspect(actual[i].value)}`);
+    }
+  });
+}
+
+function inspect(value) {
+  return util.inspect(value, {colors: true});
 }
 
 module.exports = {
@@ -33,4 +53,5 @@ module.exports = {
   failIcon: statusIcon.fail,
   divider,
   reportTestFinish,
+  reportFailedResults,
 };

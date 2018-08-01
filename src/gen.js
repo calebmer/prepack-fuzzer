@@ -513,8 +513,8 @@ const genProgramStatements = genComputation()
     }
   )
   .then(({args, statements}) => ({
-    // Generate 5 argument test cases for every argument.
-    args: gen.array(gen.array(genValue, {size: args}), {size: args * 5}),
+    // Always generate 5 test cases.
+    args: gen.array(gen.array(genValue, {size: args}), {size: 5}),
     statements: gen.return(statements),
   }));
 

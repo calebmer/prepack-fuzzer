@@ -86,6 +86,21 @@ function genComputation() {
 
     // boolean
     [10, gen.boolean.then(b => t.booleanLiteral(b))],
+
+    // // Intentional failure. Uncomment this to test if everything is working.
+    // [
+    //   1,
+    //   gen.return(
+    //     t.conditionalExpression(
+    //       t.memberExpression(
+    //         t.identifier('global'),
+    //         t.identifier('__optimize')
+    //       ),
+    //       t.booleanLiteral(true),
+    //       t.booleanLiteral(false)
+    //     )
+    //   ),
+    // ],
   ];
 
   const genScalarExpression = gen.oneOfWeighted([
@@ -487,6 +502,7 @@ const genProgramStatements = genComputation().then(
   }) => {
     mainStatements = mainStatements.push(t.returnStatement(mainExpression));
     const statements = [];
+    statements.push(t.expressionStatement(t.stringLiteral('use strict')));
     declarations.forEach(declaration => {
       statements.push(declaration);
     });

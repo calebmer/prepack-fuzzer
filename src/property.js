@@ -9,39 +9,18 @@ const {ReportStatus, reportTestFinish} = require('./report');
  * un-Prepacked program.
  */
 const prepackWorks = property(
-  genPrgramWrappedInIife.then(({args, program}) =>
-    gen.return({
-      args,
-      code: generate(program).code,
-    })
-  ),
-  ({args, code}) => {
+  genPrgramWrappedInIife.then(program => gen.return(generate(program).code)),
+  code => {
     const start = Date.now();
     try {
-      const expected = executeNormal(args, code);
-      const actual = executePrepack(args, code);
-
-      let ok = true;
-      for (let i = 0; i < expected.length; i++) {
-        const expectedResult = expected[i];
-        const actualResult = actual[i];
-        if (expectedResult.error) {
-          if (!actualResult.error) {
-            ok = false;
-            break;
-          }
-        } else {
-          if (expectedResult.value !== actualResult.value) {
-            ok = false;
-            break;
-          }
-        }
-      }
-
+      const expected = executeNormal(code);
+      const actual = executePrepack(code);
+      const ok = expected.error
+        ? actual.error
+        : expected.value === actual.value;
       const end = Date.now();
       const time = end - start;
       reportTestFinish(time, ok ? ReportStatus.pass : ReportStatus.fail);
-
       return ok;
     } catch (error) {
       const end = Date.now();

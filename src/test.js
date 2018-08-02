@@ -1,3 +1,4 @@
+const util = require('util');
 const chalk = require('chalk');
 const {check} = require('testcheck');
 const {executeNormal, executePrepack} = require('./execute');
@@ -28,13 +29,14 @@ if (test.result === true) {
   }
 
   // Log the shrunk failure case and the args which caused it to fail.
-  test.shrunk.smallest.forEach(({args, code}, i) => {
+  test.shrunk.smallest.forEach((code, i) => {
     console.error(divider);
     console.error(code);
     console.error(divider);
-    const expected = executeNormal(args, code);
-    const actual = executePrepack(args, code);
-    reportFailedResults(args, expected, actual);
+    const expected = executeNormal(code);
+    const actual = executePrepack(code);
+    console.error(`${chalk.dim('Expected:')} ${inspect(expected.value)}`);
+    console.error(`  ${chalk.dim('Actual:')} ${inspect(actual.value)}`);
   });
   console.error(divider);
 }

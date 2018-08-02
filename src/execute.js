@@ -1,21 +1,19 @@
 const vm = require('vm');
 const {prepackSources} = require('/Users/calebmer/prepack/lib/prepack-node.js');
 
-function executeNormal(args, code) {
+function executeNormal(code) {
   const context = createVmContext();
   vm.runInContext(code, context);
-  const fn = context.module.exports;
-  return args.map(args => {
-    try {
-      const value = fn(...args);
-      return {error: false, value};
-    } catch (error) {
-      return {error: true, value: error};
-    }
-  });
+  const inspect = context.module.exports;
+  try {
+    const value = inspect();
+    return {error: false, value};
+  } catch (error) {
+    return {error: true, value: error};
+  }
 }
 
-function executePrepack(args, code) {
+function executePrepack(code) {
   let prepackedCode;
   try {
     prepackedCode = prepackSources(
@@ -23,19 +21,17 @@ function executePrepack(args, code) {
       prepackOptions
     ).code;
   } catch (error) {
-    return args.map(() => ({error: true, value: error}));
+    return {error: true, value: error};
   }
   const context = createVmContext();
   vm.runInContext(prepackedCode, context);
-  const fn = context.module.exports;
-  return args.map(args => {
-    try {
-      const value = fn(...args);
-      return {error: false, value};
-    } catch (error) {
-      return {error: true, value: error};
-    }
-  });
+  const inspect = context.module.exports;
+  try {
+    const value = inspect();
+    return {error: false, value};
+  } catch (error) {
+    return {error: true, value: error};
+  }
 }
 
 function createVmContext() {

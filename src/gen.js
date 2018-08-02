@@ -19,18 +19,30 @@ const genString = gen
   .array(gen.asciiChar, {maxSize: 20})
   .then(chars => chars.join(''));
 
-const genValue = gen.oneOfWeighted([
+const genValueLiteral = gen.oneOfWeighted([
   // null / undefined
-  [1, gen.oneOf([gen.return(null), gen.return(undefined)])],
+  [
+    1,
+    gen.oneOf([
+      gen.return(t.nullLiteral()),
+      gen.return(t.identifier('undefined')),
+    ]),
+  ],
 
   // number
-  [1, gen.number],
+  [1, gen.number.then(n => gen.return(t.numericLiteral(n)))],
 
   // string
-  [1, genString],
+  [1, genString.then(s => gen.return(t.stringLiteral(s)))],
 
   // boolean
-  [7, gen.boolean],
+  [
+    7,
+    gen.oneOf([
+      gen.return(t.booleanLiteral(true)),
+      gen.return(t.booleanLiteral(false)),
+    ]),
+  ],
 ]);
 
 function genComputation() {
@@ -93,24 +105,10 @@ function genComputation() {
   const genScalarComputation = gen.oneOfWeighted([
     [
       1,
-      genValue.then(rawValue => {
-        let value;
-        if (rawValue === null) {
-          value = t.nullLiteral();
-        } else if (rawValue === undefined) {
-          value = t.identifier('undefined');
-        } else if (typeof rawValue === 'number') {
-          value = t.numericLiteral(rawValue);
-        } else if (typeof rawValue === 'string') {
-          value = t.stringLiteral(rawValue);
-        } else if (typeof rawValue === 'boolean') {
-          value = t.booleanLiteral(rawValue);
-        } else {
-          throw new Error(`Unexpected value: ${rawValue}`);
-        }
+      genValueLiteral.then(expression => {
         const result = {
           statements: Immutable.List(),
-          expression: value,
+          expression,
         };
         return {
           args: 0,
@@ -468,6 +466,11 @@ function genComputation() {
 }
 
 const genProgramStatements = genComputation()
+  .then(({args, computation, declarations}) => ({
+    args: gen.array(genValueLiteral, {size: args}),
+    computation: gen.return(computation),
+    declarations: gen.return(declarations),
+  }))
   .then(
     ({
       args,
@@ -483,9 +486,7 @@ const genProgramStatements = genComputation()
       statements.push(
         t.functionDeclaration(
           t.identifier('main'),
-          Array(args)
-            .fill(null)
-            .map((_, i) => t.identifier(`a${i + 1}`)),
+          args.map((arg, i) => t.identifier(`a${i + 1}`)),
           t.blockStatement(mainStatements.toArray())
         )
       );
@@ -505,38 +506,35 @@ const genProgramStatements = genComputation()
           t.assignmentExpression(
             '=',
             t.memberExpression(t.identifier('module'), t.identifier('exports')),
-            t.identifier('main')
+            t.functionExpression(
+              t.identifier('inspect'),
+              [],
+              t.blockStatement([
+                t.returnStatement(t.callExpression(t.identifier('main'), args)),
+              ])
+            )
           )
         )
       );
-      return gen.return({args, statements});
+      return gen.return(statements);
     }
-  )
-  .then(({args, statements}) => ({
-    // Always generate 5 test cases.
-    args: gen.array(gen.array(genValue, {size: args}), {size: 5}),
-    statements: gen.return(statements),
-  }));
+  );
 
-const genProgram = genProgramStatements.then(({args, statements}) =>
-  gen.return({
-    args,
-    program: t.program(statements),
-  })
+const genProgram = genProgramStatements.then(statements =>
+  gen.return(t.program(statements))
 );
 
-const genPrgramWrappedInIife = genProgramStatements.then(({args, statements}) =>
-  gen.return({
-    args,
-    program: t.program([
+const genPrgramWrappedInIife = genProgramStatements.then(statements =>
+  gen.return(
+    t.program([
       t.expressionStatement(
         t.callExpression(
           t.functionExpression(null, [], t.blockStatement(statements)),
           []
         )
       ),
-    ]),
-  })
+    ])
+  )
 );
 
 module.exports = {
